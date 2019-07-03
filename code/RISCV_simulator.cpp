@@ -1,4 +1,5 @@
 #include <fstream>
+#include <iostream>
 using namespace std;
 
 const unsigned END_ADDR = 0x30004;
@@ -9,18 +10,30 @@ private:
     unsigned char storage[CAPACITY];
 public:
     initialize() {
-        
+        ifstream fin("lvalue2.data");
+        unsigned addr = 0;
+        while (!fin.eof()) {
+            unsigned byte;
+            while (fin >> hex >> byte) {
+                storage[addr] = byte;
+                ++addr;
+            }
+            fin.clear();
+            fin.get();
+            fin >> addr;
+        }
+        fin.close();
     }
     int read_dword(unsigned addr) {
         int ret;
-        for (int i = 0; i < 4; ++i)
-            ret = ret << 8 + storage[addr + i];
+        for (int i = 3; i >= 0; --i)
+            ret = (ret << 8) + storage[addr + i];
         return ret;
     }
     unsigned read_word(unsigned addr) {
         unsigned ret;
-        for (int i = 0; i < 2; ++i)
-            ret = ret << 8 + storage[addr + i];
+        for (int i = 1; i >= 0; --i)
+            ret = (ret << 8) + storage[addr + i];
         return ret;
     }
     unsigned read(unsigned addr) {
@@ -46,12 +59,18 @@ public:
 class Register {
 private:
     unsigned storage;
+    bool read_only;
 public:
+    Register(): read_only(false) {}
     void load(unsigned value) {
-        storage = value;
+        if (!read_only)
+            storage = value;
     }
     unsigned read() {
         return storage;
+    }
+    void set_read_only(bool flag) {
+        read_only = flag;
     }
 };
 
@@ -213,8 +232,14 @@ public:
 
 class AUIPC: public UTypeInst {
 public:
-    void inst_fetch() {
-        pc.load(pc.read() + imm);
+    void exec() {
+        EXMEM_data = IDEX_inst_addr + imm;
+    }
+    void mem_access() {
+        MEMWB_data = EXMEM_data;
+    }
+    void write_back() {
+        reg[dest].load(MEMWB_data);
     }
 };
 
@@ -347,11 +372,11 @@ public:
         EXMEM_addr = IDEX_rval1 + imm;
         EXMEM_data = IDEX_rval2;
         if (EXMEM_addr == END_ADDR) {
-            ret_val = EXMEM_data;
+            ret_val = EXMEM_data & 0xFF;
             prog_end = true;
         }
     }
-}
+};
 
 class SB: public StoreInst {
 public:
@@ -429,7 +454,7 @@ public:
 class SLLI: public ITypeCalcInst {
 public:
     void exec() {
-        EXMEM_data = IDEX_rval1 & imm;
+        EXMEM_data = IDEX_rval1 << shamt;
     }
 };
 
@@ -447,7 +472,7 @@ public:
     }
 };
 
-class RTypeCalcInst: RTypeInst {
+class RTypeCalcInst: public RTypeInst {
 public:
     void mem_access() {
         MEMWB_data = EXMEM_data;
@@ -613,7 +638,7 @@ Inst * STypeInst::parse(unsigned code) {
         ret = new SH;
     else if (funct3 == 0x2)
         ret = new SW;
-    unsigned imm = sgnext(code >> 7 & 0x1F + code >> 25 & 0x7F << 5, 11);
+    unsigned imm = sgnext((code >> 7 & 0x1F) + ((code >> 25 & 0x7F) << 5), 11);
     unsigned src1 = code >> 15 & 0x1F;
     unsigned src2 = code >> 20 & 0x1F;
     ret->set(imm, src1, src2);
@@ -635,10 +660,11 @@ Inst * BTypeInst::parse(unsigned code) {
         ret = new BLTU;
     else if (funct3 == 0x7)
         ret = new BGEU;
-    unsigned imm = sgnext(code >> 8 & 0xF << 1 + code >> 25 & 0x3F << 5 +
-        code >> 7 & 0x1 << 11 + code >> 31 & 1 << 12, 12);
+    unsigned imm = sgnext(((code >> 8 & 0xF) << 1) + ((code >> 25 & 0x3F) << 5) +
+        ((code >> 7 & 0x1) << 11) + ((code >> 31 & 1) << 12), 12);
     unsigned src1 = code >> 15 & 0x1F;
     unsigned src2 = code >> 20 & 0x1F;
+    ret->set(imm, src1, src2);
     return (Inst *) ret;
 }
 
@@ -657,8 +683,8 @@ Inst * UTypeInst::parse(unsigned code) {
 
 Inst * JTypeInst::parse(unsigned code) {
     JTypeInst * ret = new JAL;
-    unsigned imm = sgnext(code >> 21 & 0x3FF << 1 + code >> 20 & 0x1 << 11 +
-        code >> 12 & 0xFF << 12 + code >> 31 & 0x1 << 20, 20);
+    unsigned imm = sgnext(((code >> 21 & 0x3FF) << 1) + ((code >> 20 & 0x1) << 11) +
+        ((code >> 12 & 0xFF) << 12) + ((code >> 31 & 0x1) << 20), 20);
     unsigned dest = code >> 7 & 0x1F;
     ret->set(imm, dest);
     return (Inst *) ret;
@@ -678,7 +704,7 @@ public:
 
 class InstDecode {
 public:
-    void work() {
+    void work(Inst * inst) {
         IDEX_inst_addr = IFID_inst_addr;
         inst->inst_decode();
     }
@@ -714,6 +740,8 @@ WriteBack write_back;
 int main() {
     pc.load(0);
     mem.initialize();
+    reg[0].load(0);
+    reg[0].set_read_only(true);
     prog_end = false;
     timer = 0;
     inst = NULL;
@@ -721,7 +749,7 @@ int main() {
     while (!prog_end) {
         switch (timer) {
             case 0: inst_fetch.work(); break;
-            case 1: inst_decode.work(); break;
+            case 1: inst_decode.work(inst); break;
             case 2: execute.work(inst); break;
             case 3: mem_access.work(inst); break;
             case 4: write_back.work(inst); break;
@@ -730,5 +758,6 @@ int main() {
         timer = (timer + 1) % 5;
     }
 
+    cout << ret_val << endl;
     return ret_val;
 }
