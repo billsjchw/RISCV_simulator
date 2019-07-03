@@ -5,16 +5,41 @@ const unsigned END_ADDR = 0x30004;
 
 class Memory {
 private:
-    static const int CAPACITY = 0x3FFFF;
+    static const unsigned CAPACITY = 0x3FFFF;
     unsigned char storage[CAPACITY];
 public:
     initialize() {
+        
     }
-    unsigned read_dword(unsigned addr) {
-        unsigned ret;
+    int read_dword(unsigned addr) {
+        int ret;
         for (int i = 0; i < 4; ++i)
             ret = ret << 8 + storage[addr + i];
         return ret;
+    }
+    unsigned read_word(unsigned addr) {
+        unsigned ret;
+        for (int i = 0; i < 2; ++i)
+            ret = ret << 8 + storage[addr + i];
+        return ret;
+    }
+    unsigned read(unsigned addr) {
+        return storage[addr];
+    }
+    void load_dword(unsigned addr, unsigned data) {
+        for (int i = 0; i < 4; ++i) {
+            storage[addr + i] = data;
+            data >>= 8;
+        }
+    }
+    void load_word(unsigned addr, unsigned data) {
+        for (int i = 0; i < 2; ++i) {
+            storage[addr + i] = data;
+            data >>= 8;
+        }
+    }
+    void load(unsigned addr, unsigned data) {
+        storage[addr] = data;
     }
 };
 
@@ -30,7 +55,7 @@ public:
     }
 };
 
-const int REGISTER_NUM = 32;
+const unsigned REGISTER_NUM = 32;
 
 Memory mem;
 Register reg[REGISTER_NUM];
@@ -38,32 +63,39 @@ Register pc;
 
 class Inst {
 public:
-    virtual void exec() {};
-    virtual void mem_access() {};
-    virtual void write_back() {};
+    virtual void inst_fetch() {
+        pc.load(pc.read() + 4);
+    }
+    virtual void inst_decode() {}
+    virtual void exec() {}
+    virtual void mem_access() {}
+    virtual void write_back() {}
     static Inst * parse(unsigned code);
 };
 
-Inst * ctrl_inst;
+Inst * inst;
 bool prog_end;
 unsigned timer;
 unsigned ret_val;
 
-unsigned IFID_code;
-unsigned IFID_next_seq_pc;
-unsigned IDEX_next_seq_pc;
-unsigned EXMEM_next_seq_pc;
+unsigned IFID_inst_addr;
+unsigned IDEX_inst_addr;
 unsigned IDEX_rval1, IDEX_rval2;
 unsigned EXMEM_data;
+unsigned EXMEM_addr;
 unsigned MEMWB_data;
 
 class RTypeInst: public Inst {
 protected:
-    int src1, src2, dest;
+    unsigned src1, src2, dest;
 public:
     static Inst * parse(unsigned code);
+    void inst_decode() {
+        IDEX_rval1 = reg[src1].read();
+        IDEX_rval2 = reg[src2].read();
+    }
 private:
-    void set(int src1, int src2, int dest) {
+    void set(unsigned src1, unsigned src2, unsigned dest) {
         this->src1 = src1;
         this->src2 = src2;
         this->dest = dest;
@@ -73,11 +105,14 @@ private:
 class ITypeInst: public Inst {
 protected:
     unsigned imm;
-    int src, dest, shamt;
+    unsigned src, dest, shamt;
 public:
     static Inst * parse(unsigned code);
+    void inst_decode() {
+        IDEX_rval1 = reg[src].read();
+    }
 private:
-    void set(unsigned imm, int src, int dest, int shamt) {
+    void set(unsigned imm, unsigned src, unsigned dest, unsigned shamt) {
         this->imm = imm;
         this->src = src;
         this->dest = dest;
@@ -88,11 +123,15 @@ private:
 class STypeInst: public Inst {
 protected:
     unsigned imm;
-    int src1, src2;
+    unsigned src1, src2;
 public:
     static Inst * parse(unsigned code);
+    void inst_decode() {
+        IDEX_rval1 = reg[src1].read();
+        IDEX_rval2 = reg[src2].read();
+    }
 private:
-    void set(unsigned imm, int src1, int src2) {
+    void set(unsigned imm, unsigned src1, unsigned src2) {
         this->imm = imm;
         this->src1 = src1;
         this->src2 = src2;
@@ -102,11 +141,15 @@ private:
 class BTypeInst: public Inst {
 protected:
     unsigned imm;
-    int src1, src2;
+    unsigned src1, src2;
 public:
     static Inst * parse(unsigned code);
+    void inst_decode() {
+        IDEX_rval1 = reg[src1].read();
+        IDEX_rval2 = reg[src2].read();
+    }
 private:
-    void set(unsigned imm, int src1, int src2) {
+    void set(unsigned imm, unsigned src1, unsigned src2) {
         this->imm = imm;
         this->src1 = src1;
         this->src2 = src2;
@@ -116,11 +159,11 @@ private:
 class UTypeInst: public Inst {
 protected:
     unsigned imm;
-    int dest;
+    unsigned dest;
 public:
     static Inst * parse(unsigned code);
 private:
-    void set(unsigned imm, int dest) {
+    void set(unsigned imm, unsigned dest) {
         this->imm = imm;
         this->dest = dest;
     }
@@ -129,18 +172,18 @@ private:
 class JTypeInst: public Inst {
 protected:
     unsigned imm;
-    int dest;
+    unsigned dest;
 public:
     static Inst * parse(unsigned code);
 private:
-    void set(unsigned imm, int dest) {
+    void set(unsigned imm, unsigned dest) {
         this->imm = imm;
         this->dest = dest;
     }
 };
 
 Inst * Inst::parse(unsigned code) {
-    unsigned char opcode = code & 0x7F;
+    unsigned opcode = code & 0x7F;
     if (opcode == 0x33)
         return RTypeInst::parse(code);
     else if (opcode == 0x67 || opcode == 0x3 || opcode == 0x13)
@@ -155,128 +198,346 @@ Inst * Inst::parse(unsigned code) {
         return JTypeInst::parse(code);
 }
 
+unsigned sgnext(unsigned imm, int hi) {
+    if (imm & (1 << hi))
+        imm |= 0xFFFFFFFF >> hi << hi;
+    return imm;
+}
+
 class LUI: public UTypeInst {
+public:
+    void write_back() {
+        reg[dest].load(imm);
+    }
 };
 
 class AUIPC: public UTypeInst {
+public:
+    void inst_fetch() {
+        pc.load(pc.read() + imm);
+    }
 };
 
 class JAL: public JTypeInst {
+public:
+    void inst_fetch() {
+        pc.load(pc.read() + imm);
+    }
+    void exec() {
+        EXMEM_data = IDEX_inst_addr + 4;
+    }
+    void mem_access() {
+        MEMWB_data = EXMEM_data;
+    }
+    void write_back() {
+        reg[dest].load(MEMWB_data);
+    }
 };
 
 class JALR: public ITypeInst {
+public:
+    void exec() {
+        pc.load((IDEX_rval1 + imm) & 0xFFFFFFFE);
+        EXMEM_data = IDEX_inst_addr + 4;
+    }
+    void mem_access() {
+        MEMWB_data = EXMEM_data;
+    }
+    void write_back() {
+        reg[dest].load(MEMWB_data);
+    }
 };
 
 class BEQ: public BTypeInst {
+public:
+    void exec() {
+        if (IDEX_rval1 == IDEX_rval2)
+            pc.load(IDEX_inst_addr + imm);
+    }
 };
 
 class BNE: public BTypeInst {
+public:
+    void exec() {
+        if (IDEX_rval1 != IDEX_rval2)
+            pc.load(IDEX_inst_addr + imm);
+    }
 };
 
 class BLT: public BTypeInst {
+public:
+    void exec() {
+        if ((int) IDEX_rval1 < (int) IDEX_rval2)
+            pc.load(IDEX_inst_addr + imm);
+    }
 };
 
 class BGE: public BTypeInst {
+public:
+    void exec() {
+        if ((int) IDEX_rval1 >= (int) IDEX_rval2)
+            pc.load(IDEX_inst_addr + imm);
+    }
 };
 
 class BLTU: public BTypeInst {
+public:
+    void exec() {
+        if (IDEX_rval1 < IDEX_rval2)
+            pc.load(IDEX_inst_addr + imm);
+    }
 };
 
 class BGEU: public BTypeInst {
+public:
+    void exec() {
+        if (IDEX_rval1 >= IDEX_rval2)
+            pc.load(IDEX_inst_addr + imm);
+    }
 };
 
-class LB: public ITypeInst {
+class LoadInst: public ITypeInst {
+public:
+    void exec() {
+        EXMEM_addr = IDEX_rval1 + imm;
+    }
+    void write_back() {
+        reg[dest].load(MEMWB_data);
+    }
 };
 
-class LH: public ITypeInst {
+class LB: public LoadInst {
+public:
+    void mem_access() {
+        MEMWB_data = sgnext(mem.read(EXMEM_addr), 7);
+    }
 };
 
-class LW: public ITypeInst {
+class LH: public LoadInst {
+public:
+    void mem_access() {
+        MEMWB_data = sgnext(mem.read_word(EXMEM_addr), 15);
+    }
 };
 
-class LBU: public ITypeInst {
+class LW: public LoadInst {
+public:
+    void mem_access() {
+        MEMWB_data = mem.read_dword(EXMEM_addr);
+    }
 };
 
-class LHU: public ITypeInst {
+class LBU: public LoadInst {
+public:
+    void mem_access() {
+        MEMWB_data = mem.read(EXMEM_addr);
+    }
 };
 
-class SB: public STypeInst {
+class LHU: public LoadInst {
+public:
+    void mem_access() {
+        MEMWB_data = mem.read_word(EXMEM_addr);
+    }
 };
 
-class SH: public STypeInst {
+class StoreInst: public STypeInst {
+public:
+    void exec() {
+        EXMEM_addr = IDEX_rval1 + imm;
+        EXMEM_data = IDEX_rval2;
+        if (EXMEM_addr == END_ADDR) {
+            ret_val = EXMEM_data;
+            prog_end = true;
+        }
+    }
+}
+
+class SB: public StoreInst {
+public:
+    void mem_access() {
+        mem.load(EXMEM_addr, EXMEM_data);
+    }
 };
 
-class SW: public STypeInst {
+class SH: public StoreInst {
+public:
+    void mem_access() {
+        mem.load_word(EXMEM_addr, EXMEM_data);
+    }
 };
 
-class ADDI: public ITypeInst {
+class SW: public StoreInst {
+public:
+    void mem_access() {
+        mem.load_dword(EXMEM_addr, EXMEM_data);
+    }
 };
 
-class SLTI: public ITypeInst {
+class ITypeCalcInst: public ITypeInst {
+public:
+    void mem_access() {
+        MEMWB_data = EXMEM_data;
+    }
+    void write_back() {
+        reg[dest].load(MEMWB_data);
+    }
 };
 
-class SLTIU: public ITypeInst {
+class ADDI: public ITypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = IDEX_rval1 + imm;
+    }
 };
 
-class XORI: public ITypeInst {
+class SLTI: public ITypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = (int) IDEX_rval1 < (int) imm;
+    }
 };
 
-class ORI: public ITypeInst {
+class SLTIU: public ITypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = IDEX_rval1 < imm;
+    }
 };
 
-class ANDI: public ITypeInst {
+class XORI: public ITypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = IDEX_rval1 ^ imm;
+    }
 };
 
-class SLLI: public ITypeInst {
+class ORI: public ITypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = IDEX_rval1 | imm;
+    }
 };
 
-class SRLI: public ITypeInst {
+class ANDI: public ITypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = IDEX_rval1 & imm;
+    }
 };
 
-class SRAI: public ITypeInst {
+class SLLI: public ITypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = IDEX_rval1 & imm;
+    }
 };
 
-class ADD: public RTypeInst {
+class SRLI: public ITypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = IDEX_rval1 >> shamt;
+    }
 };
 
-class SUB: public RTypeInst {
+class SRAI: public ITypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = (int) IDEX_rval1 >> shamt;
+    }
 };
 
-class SLL: public RTypeInst {
+class RTypeCalcInst: RTypeInst {
+public:
+    void mem_access() {
+        MEMWB_data = EXMEM_data;
+    }
+    void write_back() {
+        reg[dest].load(MEMWB_data);
+    }
 };
 
-class SLT: public RTypeInst {
+class ADD: public RTypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = IDEX_rval1 + IDEX_rval2;
+    }
 };
 
-class SLTU: public RTypeInst {
+class SUB: public RTypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = IDEX_rval1 - IDEX_rval2;
+    }
 };
 
-class XOR: public RTypeInst {
+class SLL: public RTypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = IDEX_rval1 << (IDEX_rval2 & 0x1F);
+    }
 };
 
-class SRL: public RTypeInst {
+class SLT: public RTypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = (int) IDEX_rval1 < (int) IDEX_rval2;
+    }
 };
 
-class SRA: public RTypeInst {
+class SLTU: public RTypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = IDEX_rval1 < IDEX_rval2;
+    }
 };
 
-class OR: public RTypeInst {
+class XOR: public RTypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = IDEX_rval1 ^ IDEX_rval2;
+    }
 };
 
-class AND: public RTypeInst {
+class SRL: public RTypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = IDEX_rval1 >> (IDEX_rval2 & 0x1F);
+    }
+};
+
+class SRA: public RTypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = (int) IDEX_rval1 >> (IDEX_rval2 & 0x1F);
+    }
+};
+
+class OR: public RTypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = IDEX_rval1 | IDEX_rval2;
+    }
+};
+
+class AND: public RTypeCalcInst {
+public:
+    void exec() {
+        EXMEM_data = IDEX_rval1 & IDEX_rval2;
+    }
 };
 
 Inst * RTypeInst::parse(unsigned code) {
     RTypeInst * ret;
-    unsigned char funct3 = code >> 12 & 0x7;
-    unsigned char funct7 = code >> 25;
+    unsigned funct3 = code >> 12 & 0x7;
+    unsigned funct7 = code >> 25;
     if (funct3 == 0 && funct7 == 0)
         ret = new ADD;
-    else if (funct3 == 0 && funct7 = 0x20)
+    else if (funct3 == 0 && funct7 == 0x20)
         ret = new SUB;
     else if (funct3 == 0x1)
         ret = new SLL;
-    else if (funct3 === 0x2)
+    else if (funct3 == 0x2)
         ret = new SLT;
     else if (funct3 == 0x3)
         ret = new SLTU;
@@ -290,18 +551,18 @@ Inst * RTypeInst::parse(unsigned code) {
         ret = new OR;
     else if (funct3 == 0x7)
         ret = new AND;
-    int src1 = code >> 15 & 0x1F;
-    int src2 = code >> 20 & 0x1F;
-    int dest = code >> 7 & 0x1F;
+    unsigned src1 = code >> 15 & 0x1F;
+    unsigned src2 = code >> 20 & 0x1F;
+    unsigned dest = code >> 7 & 0x1F;
     ret->set(src1, src2, dest);
     return (Inst *) ret;
 }
 
 Inst * ITypeInst::parse(unsigned code) {
     ITypeInst * ret;
-    unsigned char opcode = code & 0x7F;
-    unsigned char funct3 = code >> 12 & 0x7;
-    unsigned char funct7 = code >> 25;
+    unsigned opcode = code & 0x7F;
+    unsigned funct3 = code >> 12 & 0x7;
+    unsigned funct7 = code >> 25;
     if (opcode == 0x67)
         ret = new JALR;
     else if (opcode == 0x3) {
@@ -335,9 +596,9 @@ Inst * ITypeInst::parse(unsigned code) {
         else if (funct3 == 0x5 && funct7 == 0x20)
             ret = new SRAI;
     }
-    unsigned imm = code >> 20;
-    int src = code >> 15 & 0x1F;
-    int dest = code >> 7 & 0x1F;
+    unsigned imm = sgnext(code >> 20, 11);
+    unsigned src = code >> 15 & 0x1F;
+    unsigned dest = code >> 7 & 0x1F;
     unsigned shamt = imm & 0x1F;
     ret->set(imm, src, dest, shamt);
     return (Inst *) ret;
@@ -352,16 +613,16 @@ Inst * STypeInst::parse(unsigned code) {
         ret = new SH;
     else if (funct3 == 0x2)
         ret = new SW;
-    unsigned imm = code >> 7 & 0x1F + code >> 25 & 0x7F << 5;
-    int src1 = code >> 15 & 0x1F;
-    int src2 = code >> 20 & 0x1F;
+    unsigned imm = sgnext(code >> 7 & 0x1F + code >> 25 & 0x7F << 5, 11);
+    unsigned src1 = code >> 15 & 0x1F;
+    unsigned src2 = code >> 20 & 0x1F;
     ret->set(imm, src1, src2);
     return (Inst *) ret;
 }
 
 Inst * BTypeInst::parse(unsigned code) {
     BTypeInst * ret;
-    unsigned char funct3 = code >> 12 & 0x7;
+    unsigned funct3 = code >> 12 & 0x7;
     if (funct3 == 0)
         ret = new BEQ;
     else if (funct3 == 0x1)
@@ -374,31 +635,31 @@ Inst * BTypeInst::parse(unsigned code) {
         ret = new BLTU;
     else if (funct3 == 0x7)
         ret = new BGEU;
-    unsigned imm = code >> 8 & 0xF << 1 + code >> 25 & 0x3F << 5 +
-        code >> 7 & 0x1 << 11 + code >> 31 & 1 << 12;
-    int src1 = code >> 15 & 0x1F;
-    int src2 = code >> 20 & 0x1F;
+    unsigned imm = sgnext(code >> 8 & 0xF << 1 + code >> 25 & 0x3F << 5 +
+        code >> 7 & 0x1 << 11 + code >> 31 & 1 << 12, 12);
+    unsigned src1 = code >> 15 & 0x1F;
+    unsigned src2 = code >> 20 & 0x1F;
     return (Inst *) ret;
 }
 
 Inst * UTypeInst::parse(unsigned code) {
     UTypeInst * ret;
-    unsigned char opcode = code & 0x7F;
+    unsigned opcode = code & 0x7F;
     if (opcode == 0x37)
         ret = new LUI;
     else if (opcode == 0x17)
         ret = new AUIPC;
     unsigned imm = code & 0xFFFFF000;
-    int dest = code >> 7 & 0x1F;
+    unsigned dest = code >> 7 & 0x1F;
     ret->set(imm, dest);
     return (Inst *) ret;
 }
 
 Inst * JTypeInst::parse(unsigned code) {
-    JTypeInst * ret = new JALR;
-    unsigned imm = code >> 21 & 0x3FF << 1 + code >> 20 & 0x1 << 11 +
-        code >> 12 & 0xFF << 12 + code >> 31 & 0x1 << 20;
-    int dest = code >> 7 & 0x1F;
+    JTypeInst * ret = new JAL;
+    unsigned imm = sgnext(code >> 21 & 0x3FF << 1 + code >> 20 & 0x1 << 11 +
+        code >> 12 & 0xFF << 12 + code >> 31 & 0x1 << 20, 20);
+    unsigned dest = code >> 7 & 0x1F;
     ret->set(imm, dest);
     return (Inst *) ret;
 }
@@ -408,15 +669,18 @@ class InstFetch {
 public:
     void work() {
         unsigned addr = pc.read();
-        IFID_code = mem.read_dword(addr);
-        IFID_next_seq_pc = addr + 4;
+        IFID_inst_addr = addr;
+        delete inst;
+        inst = Inst::parse(mem.read_dword(addr));
+        inst->inst_fetch();
     }
 };
 
 class InstDecode {
 public:
     void work() {
-        IDEX_next_seq_pc = IFID_next_seq_pc;
+        IDEX_inst_addr = IFID_inst_addr;
+        inst->inst_decode();
     }
 };
 
@@ -424,7 +688,6 @@ class Execute {
 public:
     void work(Inst * inst) {
         inst->exec();
-        EXMEM_next_seq_pc = IDEX_next_seq_pc;
     }
 };
 
@@ -453,15 +716,15 @@ int main() {
     mem.initialize();
     prog_end = false;
     timer = 0;
-    ctrl_inst = NULL;
+    inst = NULL;
 
     while (!prog_end) {
         switch (timer) {
             case 0: inst_fetch.work(); break;
             case 1: inst_decode.work(); break;
-            case 2: execute.work(ctrl_inst); break;
-            case 3: mem_access.work(ctrl_inst); break;
-            case 4: write_back.work(ctrl_inst); break;
+            case 2: execute.work(inst); break;
+            case 3: mem_access.work(inst); break;
+            case 4: write_back.work(inst); break;
             default: break;
         }
         timer = (timer + 1) % 5;
