@@ -1,4 +1,3 @@
-#include <fstream>
 #include <iostream>
 using namespace std;
 
@@ -9,20 +8,18 @@ private:
     static const unsigned CAPACITY = 0x3FFFF;
     unsigned char storage[CAPACITY];
 public:
-    initialize() {
-        ifstream fin("test.data");
+    void initialize() {
         unsigned addr = 0;
-        while (!fin.eof()) {
+        while (!cin.eof()) {
             unsigned byte;
-            while (fin >> hex >> byte) {
+            while (cin >> hex >> byte) {
                 storage[addr] = byte;
                 ++addr;
             }
-            fin.clear();
-            fin.get();
-            fin >> addr;
+            cin.clear();
+            cin.get();
+            cin >> addr;
         }
-        fin.close();
     }
     int read_dword(unsigned addr) {
         int ret;
@@ -762,6 +759,6 @@ int main() {
         timer = (timer + 1) % 5;
     }
 
-    cout << dec << ret_val << endl;
-    return ret_val;
+    cout << ret_val << endl;
+    return 0;
 }
