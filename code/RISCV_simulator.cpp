@@ -10,7 +10,7 @@ private:
     unsigned char storage[CAPACITY];
 public:
     initialize() {
-        ifstream fin("lvalue2.data");
+        ifstream fin("test.data");
         unsigned addr = 0;
         while (!fin.eof()) {
             unsigned byte;
@@ -371,15 +371,19 @@ public:
     void exec() {
         EXMEM_addr = IDEX_rval1 + imm;
         EXMEM_data = IDEX_rval2;
-        if (EXMEM_addr == END_ADDR) {
-            ret_val = EXMEM_data & 0xFF;
-            prog_end = true;
-        }
     }
 };
 
 class SB: public StoreInst {
 public:
+    void exec() {
+        EXMEM_addr = IDEX_rval1 + imm;
+        EXMEM_data = IDEX_rval2;
+        if (EXMEM_addr == END_ADDR) {
+            ret_val = reg[10].read() & 0xFF;
+            prog_end = true;
+        }
+    }
     void mem_access() {
         mem.load(EXMEM_addr, EXMEM_data);
     }
@@ -634,7 +638,7 @@ Inst * STypeInst::parse(unsigned code) {
     unsigned funct3 = code >> 12 & 0x7;
     if (funct3 == 0)
         ret = new SB;
-    else if (funct3 = 0x1)
+    else if (funct3 == 0x1)
         ret = new SH;
     else if (funct3 == 0x2)
         ret = new SW;
@@ -758,6 +762,6 @@ int main() {
         timer = (timer + 1) % 5;
     }
 
-    cout << ret_val << endl;
+    cout << dec << ret_val << endl;
     return ret_val;
 }
