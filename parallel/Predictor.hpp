@@ -23,7 +23,7 @@ public:
         if (taken && tab[hist & 0x3] != 3)
             ++tab[hist & 0x3];
         hist <<= 1;
-        hist &= taken;
+        hist |= taken;
     }
 };
 

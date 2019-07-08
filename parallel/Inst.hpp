@@ -11,6 +11,7 @@ Register reg[32];
 Register pc;
 bool stall, bubble, ret;
 std::unordered_map<unsigned, Predictor> pred;
+unsigned branch, correct;
 
 enum Stage {IF, ID, EX, MEM, WB};
 
@@ -382,13 +383,15 @@ public:
         get_fwd(src2, rhs);
     }
     void execute() {
+        ++branch;
         unsigned next_pc;
         bool taken = judge(lhs, rhs);
         next_pc = cur_pc + (taken ? imm : 4);
         if (pred_pc != next_pc) {
             pc.write(next_pc);
             bubble = true;
-        }
+        } else
+            ++correct;
         pred[cur_pc].update(taken);
     }
     virtual bool judge(unsigned lhs, unsigned rhs) {
