@@ -1,8 +1,11 @@
 #include <iostream>
+#include <cstdio>
 #include "Inst.hpp"
 using namespace std;
 
 int main() {
+    branch = 0;
+    correct = 0;
     mem.init();
     reg[0].set_zero();
     pc.write(0);
@@ -41,6 +44,8 @@ int main() {
     }
 
     cout << (reg[10].read() & 0xFF) << endl;
+    if (branch)
+        cout << ((double) correct / branch * 100) << "%" << endl;
     delete inst[ID];
     delete inst[EX];
     delete inst[MEM];
