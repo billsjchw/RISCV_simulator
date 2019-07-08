@@ -1,13 +1,14 @@
 #include <iostream>
-#include <cstdio>
-#include <typeinfo>
 using namespace std;
+
+const unsigned END_ADDR = 0x30004;
 
 class Memory {
 private:
-    unsigned char storage[0x400000];
+    static const unsigned CAPACITY = 0x3FFFF;
+    unsigned char storage[CAPACITY];
 public:
-    void init() {
+    void initialize() {
         unsigned addr = 0;
         while (!cin.eof()) {
             unsigned byte;
@@ -20,69 +21,66 @@ public:
             cin >> addr;
         }
     }
-    int load_dword(unsigned addr) {
+    int read_dword(unsigned addr) {
         int ret;
         for (int i = 3; i >= 0; --i)
             ret = (ret << 8) + storage[addr + i];
         return ret;
     }
-    unsigned load_word(unsigned addr) {
+    unsigned read_word(unsigned addr) {
         unsigned ret;
         for (int i = 1; i >= 0; --i)
             ret = (ret << 8) + storage[addr + i];
         return ret;
     }
-    unsigned load(unsigned addr) {
+    unsigned read(unsigned addr) {
         return storage[addr];
     }
-    void store_dword(unsigned addr, unsigned data) {
+    void load_dword(unsigned addr, unsigned data) {
         for (int i = 0; i < 4; ++i) {
             storage[addr + i] = data;
             data >>= 8;
         }
     }
-    void store_word(unsigned addr, unsigned data) {
+    void load_word(unsigned addr, unsigned data) {
         for (int i = 0; i < 2; ++i) {
             storage[addr + i] = data;
             data >>= 8;
         }
     }
-    void store(unsigned addr, unsigned data) {
+    void load(unsigned addr, unsigned data) {
         storage[addr] = data;
     }
 };
 
 class Register {
-protected:
+private:
     unsigned storage;
-    bool zero;
+    bool read_only;
 public:
-    Register(): zero(false) {}
-    void store(unsigned value) {
-        if (!zero)
+    Register(): read_only(false) {}
+    void load(unsigned value) {
+        if (!read_only)
             storage = value;
     }
-    virtual unsigned load() {
+    unsigned read() {
         return storage;
     }
-    void set_zero() {
-        storage = 0;
-        zero = true;
+    void set_read_only(bool flag) {
+        read_only = flag;
     }
 };
 
+const unsigned REGISTER_NUM = 32;
+
 Memory mem;
-Register reg[32];
+Register reg[REGISTER_NUM];
 Register pc;
-Register IFID_addr;
-Register IDEX_rval1, IDEX_rval2, IDEX_addr;
-Register EXMEM_data, EXMEM_addr;
-Register MEMWB;
 
 class Inst {
 public:
     virtual void inst_fetch() {
-        pc.store(pc.load() + 4);
+        pc.load(pc.read() + 4);
     }
     virtual void inst_decode() {}
     virtual void exec() {}
@@ -92,9 +90,16 @@ public:
 };
 
 Inst * inst;
-bool ret_flag;
+bool prog_end;
 unsigned timer;
 unsigned ret_val;
+
+unsigned IFID_inst_addr;
+unsigned IDEX_inst_addr;
+unsigned IDEX_rval1, IDEX_rval2;
+unsigned EXMEM_data;
+unsigned EXMEM_addr;
+unsigned MEMWB_data;
 
 class RTypeInst: public Inst {
 protected:
@@ -102,8 +107,8 @@ protected:
 public:
     static Inst * parse(unsigned code);
     void inst_decode() {
-        IDEX_rval1.store(reg[src1].load());
-        IDEX_rval2.store(reg[src2].load());
+        IDEX_rval1 = reg[src1].read();
+        IDEX_rval2 = reg[src2].read();
     }
 private:
     void set(unsigned src1, unsigned src2, unsigned dest) {
@@ -120,7 +125,7 @@ protected:
 public:
     static Inst * parse(unsigned code);
     void inst_decode() {
-        IDEX_rval1.store(reg[src].load());
+        IDEX_rval1 = reg[src].read();
     }
 private:
     void set(unsigned imm, unsigned src, unsigned dest, unsigned shamt) {
@@ -138,8 +143,8 @@ protected:
 public:
     static Inst * parse(unsigned code);
     void inst_decode() {
-        IDEX_rval1.store(reg[src1].load());
-        IDEX_rval2.store(reg[src2].load());
+        IDEX_rval1 = reg[src1].read();
+        IDEX_rval2 = reg[src2].read();
     }
 private:
     void set(unsigned imm, unsigned src1, unsigned src2) {
@@ -156,8 +161,8 @@ protected:
 public:
     static Inst * parse(unsigned code);
     void inst_decode() {
-        IDEX_rval1.store(reg[src1].load());
-        IDEX_rval2.store(reg[src2].load());
+        IDEX_rval1 = reg[src1].read();
+        IDEX_rval2 = reg[src2].read();
     }
 private:
     void set(unsigned imm, unsigned src1, unsigned src2) {
@@ -218,333 +223,333 @@ unsigned sgnext(unsigned imm, int hi) {
 class LUI: public UTypeInst {
 public:
     void write_back() {
-        reg[dest].store(imm);
+        reg[dest].load(imm);
     }
 };
 
 class AUIPC: public UTypeInst {
 public:
     void exec() {
-        EXMEM_addr.store(IDEX_addr.load() + imm);
+        EXMEM_data = IDEX_inst_addr + imm;
     }
     void mem_access() {
-        MEMWB.store(EXMEM_addr.load());
+        MEMWB_data = EXMEM_data;
     }
     void write_back() {
-        reg[dest].store(MEMWB.load());
+        reg[dest].load(MEMWB_data);
     }
 };
 
 class JAL: public JTypeInst {
 public:
     void inst_fetch() {
-        pc.store(pc.load() + imm);
+        pc.load(pc.read() + imm);
     }
     void exec() {
-        EXMEM_data.store(IDEX_addr.load() + 4);
+        EXMEM_data = IDEX_inst_addr + 4;
     }
     void mem_access() {
-        MEMWB.store(EXMEM_data.load());
+        MEMWB_data = EXMEM_data;
     }
     void write_back() {
-        reg[dest].store(MEMWB.load());
+        reg[dest].load(MEMWB_data);
     }
 };
 
 class JALR: public ITypeInst {
 public:
     void exec() {
-        pc.store((IDEX_rval1.load() + imm) & 0xFFFFFFFE);
-        EXMEM_data.store(IDEX_addr.load() + 4);
+        pc.load((IDEX_rval1 + imm) & 0xFFFFFFFE);
+        EXMEM_data = IDEX_inst_addr + 4;
     }
     void mem_access() {
-        MEMWB.store(EXMEM_data.load());
+        MEMWB_data = EXMEM_data;
     }
     void write_back() {
-        reg[dest].store(MEMWB.load());
+        reg[dest].load(MEMWB_data);
     }
 };
 
 class BEQ: public BTypeInst {
 public:
     void exec() {
-        if (IDEX_rval1.load() == IDEX_rval2.load())
-            pc.store(IDEX_addr.load() + imm);
+        if (IDEX_rval1 == IDEX_rval2)
+            pc.load(IDEX_inst_addr + imm);
     }
 };
 
 class BNE: public BTypeInst {
 public:
     void exec() {
-        if (IDEX_rval1.load() != IDEX_rval2.load())
-            pc.store(IDEX_addr.load() + imm);
+        if (IDEX_rval1 != IDEX_rval2)
+            pc.load(IDEX_inst_addr + imm);
     }
 };
 
 class BLT: public BTypeInst {
 public:
     void exec() {
-        if ((int) IDEX_rval1.load() < (int) IDEX_rval2.load())
-            pc.store(IDEX_addr.load() + imm);
+        if ((int) IDEX_rval1 < (int) IDEX_rval2)
+            pc.load(IDEX_inst_addr + imm);
     }
 };
 
 class BGE: public BTypeInst {
 public:
     void exec() {
-        if ((int) IDEX_rval1.load() >= (int) IDEX_rval2.load())
-            pc.store(IDEX_addr.load() + imm);
+        if ((int) IDEX_rval1 >= (int) IDEX_rval2)
+            pc.load(IDEX_inst_addr + imm);
     }
 };
 
 class BLTU: public BTypeInst {
 public:
     void exec() {
-        if (IDEX_rval1.load() < IDEX_rval2.load())
-            pc.store(IDEX_addr.load() + imm);
+        if (IDEX_rval1 < IDEX_rval2)
+            pc.load(IDEX_inst_addr + imm);
     }
 };
 
 class BGEU: public BTypeInst {
 public:
     void exec() {
-        if (IDEX_rval1.load() >= IDEX_rval2.load())
-            pc.store(IDEX_addr.load() + imm);
+        if (IDEX_rval1 >= IDEX_rval2)
+            pc.load(IDEX_inst_addr + imm);
     }
 };
 
-class storeInst: public ITypeInst {
+class LoadInst: public ITypeInst {
 public:
     void exec() {
-        EXMEM_addr.store(IDEX_rval1.load() + imm);
+        EXMEM_addr = IDEX_rval1 + imm;
     }
     void write_back() {
-        reg[dest].store(MEMWB.load());
+        reg[dest].load(MEMWB_data);
     }
 };
 
-class LB: public storeInst {
+class LB: public LoadInst {
 public:
     void mem_access() {
-        MEMWB.store(sgnext(mem.load(EXMEM_addr.load()), 7));
+        MEMWB_data = sgnext(mem.read(EXMEM_addr), 7);
     }
 };
 
-class LH: public storeInst {
+class LH: public LoadInst {
 public:
     void mem_access() {
-        MEMWB.store(sgnext(mem.load_word(EXMEM_addr.load()), 15));
+        MEMWB_data = sgnext(mem.read_word(EXMEM_addr), 15);
     }
 };
 
-class LW: public storeInst {
+class LW: public LoadInst {
 public:
     void mem_access() {
-        MEMWB.store(mem.load_dword(EXMEM_addr.load()));
+        MEMWB_data = mem.read_dword(EXMEM_addr);
     }
 };
 
-class LBU: public storeInst {
+class LBU: public LoadInst {
 public:
     void mem_access() {
-        MEMWB.store(mem.load(EXMEM_addr.load()));
+        MEMWB_data = mem.read(EXMEM_addr);
     }
 };
 
-class LHU: public storeInst {
+class LHU: public LoadInst {
 public:
     void mem_access() {
-        MEMWB.store(mem.load_word(EXMEM_addr.load()));
+        MEMWB_data = mem.read_word(EXMEM_addr);
     }
 };
 
 class StoreInst: public STypeInst {
 public:
     void exec() {
-        EXMEM_addr.store(IDEX_rval1.load() + imm);
-        EXMEM_data.store(IDEX_rval2.load());
+        EXMEM_addr = IDEX_rval1 + imm;
+        EXMEM_data = IDEX_rval2;
     }
 };
 
 class SB: public StoreInst {
 public:
     void exec() {
-        EXMEM_addr.store(IDEX_rval1.load() + imm);
-        EXMEM_data.store(IDEX_rval2.load());
-        if (EXMEM_addr.load() == 0x30004) {
-            ret_val = reg[10].load() & 0xFF;
-            ret_flag = true;
+        EXMEM_addr = IDEX_rval1 + imm;
+        EXMEM_data = IDEX_rval2;
+        if (EXMEM_addr == END_ADDR) {
+            ret_val = reg[10].read() & 0xFF;
+            prog_end = true;
         }
     }
     void mem_access() {
-        mem.store(EXMEM_addr.load(), EXMEM_data.load());
+        mem.load(EXMEM_addr, EXMEM_data);
     }
 };
 
 class SH: public StoreInst {
 public:
     void mem_access() {
-        mem.store_word(EXMEM_addr.load(), EXMEM_data.load());
+        mem.load_word(EXMEM_addr, EXMEM_data);
     }
 };
 
 class SW: public StoreInst {
 public:
     void mem_access() {
-        mem.store_dword(EXMEM_addr.load(), EXMEM_data.load());
+        mem.load_dword(EXMEM_addr, EXMEM_data);
     }
 };
 
 class ITypeCalcInst: public ITypeInst {
 public:
     void mem_access() {
-        MEMWB.store(EXMEM_data.load());
+        MEMWB_data = EXMEM_data;
     }
     void write_back() {
-        reg[dest].store(MEMWB.load());
+        reg[dest].load(MEMWB_data);
     }
 };
 
 class ADDI: public ITypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store(IDEX_rval1.load() + imm);
+        EXMEM_data = IDEX_rval1 + imm;
     }
 };
 
 class SLTI: public ITypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store((int) IDEX_rval1.load() < (int) imm);
+        EXMEM_data = (int) IDEX_rval1 < (int) imm;
     }
 };
 
 class SLTIU: public ITypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store(IDEX_rval1.load() < imm);
+        EXMEM_data = IDEX_rval1 < imm;
     }
 };
 
 class XORI: public ITypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store(IDEX_rval1.load() ^ imm);
+        EXMEM_data = IDEX_rval1 ^ imm;
     }
 };
 
 class ORI: public ITypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store(IDEX_rval1.load() | imm);
+        EXMEM_data = IDEX_rval1 | imm;
     }
 };
 
 class ANDI: public ITypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store(IDEX_rval1.load() & imm);
+        EXMEM_data = IDEX_rval1 & imm;
     }
 };
 
 class SLLI: public ITypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store(IDEX_rval1.load() << shamt);
+        EXMEM_data = IDEX_rval1 << shamt;
     }
 };
 
 class SRLI: public ITypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store(IDEX_rval1.load() >> shamt);
+        EXMEM_data = IDEX_rval1 >> shamt;
     }
 };
 
 class SRAI: public ITypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store((int) IDEX_rval1.load() >> shamt);
+        EXMEM_data = (int) IDEX_rval1 >> shamt;
     }
 };
 
 class RTypeCalcInst: public RTypeInst {
 public:
     void mem_access() {
-        MEMWB.store(EXMEM_data.load());
+        MEMWB_data = EXMEM_data;
     }
     void write_back() {
-        reg[dest].store(MEMWB.load());
+        reg[dest].load(MEMWB_data);
     }
 };
 
 class ADD: public RTypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store(IDEX_rval1.load() + IDEX_rval2.load());
+        EXMEM_data = IDEX_rval1 + IDEX_rval2;
     }
 };
 
 class SUB: public RTypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store(IDEX_rval1.load() - IDEX_rval2.load());
+        EXMEM_data = IDEX_rval1 - IDEX_rval2;
     }
 };
 
 class SLL: public RTypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store(IDEX_rval1.load() << (IDEX_rval2.load() & 0x1F));
+        EXMEM_data = IDEX_rval1 << (IDEX_rval2 & 0x1F);
     }
 };
 
 class SLT: public RTypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store((int) IDEX_rval1.load() < (int) IDEX_rval2.load());
+        EXMEM_data = (int) IDEX_rval1 < (int) IDEX_rval2;
     }
 };
 
 class SLTU: public RTypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store(IDEX_rval1.load() < IDEX_rval2.load());
+        EXMEM_data = IDEX_rval1 < IDEX_rval2;
     }
 };
 
 class XOR: public RTypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store(IDEX_rval1.load() ^ IDEX_rval2.load());
+        EXMEM_data = IDEX_rval1 ^ IDEX_rval2;
     }
 };
 
 class SRL: public RTypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store(IDEX_rval1.load() >> (IDEX_rval2.load() & 0x1F));
+        EXMEM_data = IDEX_rval1 >> (IDEX_rval2 & 0x1F);
     }
 };
 
 class SRA: public RTypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store((int) IDEX_rval1.load() >> (IDEX_rval2.load() & 0x1F));
+        EXMEM_data = (int) IDEX_rval1 >> (IDEX_rval2 & 0x1F);
     }
 };
 
 class OR: public RTypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store(IDEX_rval1.load() | IDEX_rval2.load());
+        EXMEM_data = IDEX_rval1 | IDEX_rval2;
     }
 };
 
 class AND: public RTypeCalcInst {
 public:
     void exec() {
-        EXMEM_data.store(IDEX_rval1.load() & IDEX_rval2.load());
+        EXMEM_data = IDEX_rval1 & IDEX_rval2;
     }
 };
 
@@ -690,10 +695,10 @@ Inst * JTypeInst::parse(unsigned code) {
 class InstFetch {
 public:
     void work() {
-        unsigned addr = pc.load();
+        unsigned addr = pc.read();
+        IFID_inst_addr = addr;
         delete inst;
-        inst = Inst::parse(mem.load_dword(addr));
-        IFID_addr.store(addr);
+        inst = Inst::parse(mem.read_dword(addr));
         inst->inst_fetch();
     }
 };
@@ -701,7 +706,7 @@ public:
 class InstDecode {
 public:
     void work(Inst * inst) {
-        IDEX_addr.store(IFID_addr.load());
+        IDEX_inst_addr = IFID_inst_addr;
         inst->inst_decode();
     }
 };
@@ -734,15 +739,15 @@ MemoryAccess mem_access;
 WriteBack write_back;
 
 int main() {
-    freopen("test.data", "r", stdin);
-    pc.store(0);
-    mem.init();
-    reg[0].set_zero();
-    ret_flag = false;
+    pc.load(0);
+    mem.initialize();
+    reg[0].load(0);
+    reg[0].set_read_only(true);
+    prog_end = false;
     timer = 0;
     inst = NULL;
 
-    while (!ret_flag) {
+    while (!prog_end) {
         switch (timer) {
             case 0: inst_fetch.work(); break;
             case 1: inst_decode.work(inst); break;
